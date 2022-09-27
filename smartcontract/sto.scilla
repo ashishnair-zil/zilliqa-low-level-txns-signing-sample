@@ -1,0 +1,365 @@
+scilla_version 0
+
+import BoolUtils IntUtils ListUtils
+(***************************************************)
+(*               Associated library                *)
+(***************************************************)
+library STO
+
+(* Standard Enums *)
+let zero = Uint128 0
+
+
+(* Get Recipient's new balance after transfer has succeeded *)
+let get_recipient_new_balance =
+  fun (current_balance: Option Uint128) =>
+  fun (tokens : Uint128) =>
+    match current_balance with
+    | Some bal => builtin add tokens bal
+    | None => tokens
+    end
+
+type Error =
+| Unauthorised
+| NotFromRegistry
+| InsufficientBalance
+| InvalidParams
+| NoBalance
+| ContractFrozenFailure
+
+(* Generic error event library. Called by procedure MakeError *)
+let make_error_event =
+  fun (transitionName : String) =>
+  fun (err: Error) =>
+    let err_code =
+        match err with
+        | Unauthorised          => Int32 -101
+        | NotFromRegistry       => Int32 -102
+        | InsufficientBalance   => Int32 -103
+        | InvalidParams         => Int32 -104
+        | NoBalance             => Int32 -105
+        | ContractFrozenFailure => Int32 -106
+        end in
+    { _eventname: "Error"; raisedAt: transitionName; err_code: err_code}
+
+
+(* Error event library. Called by procedure ThrowError *)
+let make_error =
+  fun (result: Error) =>
+    let result_code =
+      match result with
+      | Unauthorised          => Int32 -101
+      | NotFromRegistry       => Int32 -102
+      | InsufficientBalance   => Int32 -103
+      | InvalidParams         => Int32 -104
+      | NoBalance             => Int32 -105
+      | ContractFrozenFailure => Int32 -106
+      end
+    in
+    { _exception: "Error"; code: result_code }
+
+let bool_active = True
+let bool_inactive = False
+
+
+(***************************************************)
+(*             The contract definition             *)
+(***************************************************)
+
+(* cmps_name                  String - name of product being digitalized                            *)
+(* cmps_symbol                String - symbol for the digital product                               *)
+(* cmps_type                  String - type of digital product                                      *)
+(* cmps_profile               String - profile of the product, e.g. stationery, wine                *)
+(* issuer                     String - issuer of the product, e.g. ACME                             *)
+(* seller_profile             String - e.g. EOS, INVESTOR, SELLER                                   *)
+(* structure                  String - e.g. DIRECT, INDIRECT, CARRY                                 *)
+(* conversion_rate            Uint128 - number of decimal placings represented.                     *)
+(* firm_id                    String - internal id of firm selling this cmps                        *)
+(* initial_owner              String - owner of the contract, e.g. custodian address                *)
+(* initial_client_address     String - member representive wallet that create this cmps             *)
+(* initial_cmps_supply        String - initial supply of cmps                                       *)
+(* initial_registry_contract  String - registry contract address                                    *)
+(* initial_maturity_date      String - e.g. YYYY format                                             *)
+(* payout_frequency           String - e.g. MONTHLY, QUARTERLY, ANNUALLY                            *)
+(* interest_rate              Uint256 - interest rate of cmps  For e.g. 1 = 0.01%, 10000 = 100%     *)
+(* isin_number                String - Alphanumeric Inputs                                          *)
+(* denomination               Uint128- Denomination of cmps                                         *)
+(* issue_currency             String - e.g. SGD, EUR, USD, GBP etc                                  *)
+(* first_issue_date           String - e.g. YYYY format                                             *)
+(* put_right_of_holder        String - e.g. Y/N                                                     *)
+(* early_redemption           String - e.g. Y/N                                                     *)
+(* governing_law              String - Country Name e.g. INDIA, SINGAPORE, USA, etc                 *)
+(* contract_version           String - tracks this contract version e.g. 0.1.0                      *)
+
+contract STO
+(
+  cmps_name: String,
+  cmps_symbol: String,
+  cmps_type: String,
+  cmps_profile: String,
+  issuer: String,
+  seller_profile: String,
+  structure: String,
+  conversion_rate: Uint128,
+  firm_id: String,
+  initial_owner: ByStr20,
+  initial_client_address: ByStr20,
+  initial_cmps_supply: Uint128,
+  initial_registry_contract: ByStr20,
+  initial_maturity_date: String,
+  payout_frequency: String,
+  interest_rate: Uint256,
+  isin_number: String,
+  denomination: Uint128,
+  issue_currency: String,
+  first_issue_date: String,
+  put_right_of_holder:String,
+  early_redemption: String,
+  governing_law: String,
+  contract_version: String
+)
+
+
+(* Initial balance is not stated explicitly: it's initialized when creating the contract. *)
+field token_balances : Map ByStr20 Uint128 =
+    let m = Emp ByStr20 Uint128 in
+    let initial_tokens = builtin mul conversion_rate initial_cmps_supply in
+    builtin put m initial_client_address initial_tokens
+
+(* Whitelist participants *)
+(* Mapping from the user address to the timestamp where he is added *)
+field total_tokens : Uint128 = let initial_tokens = builtin mul conversion_rate initial_cmps_supply in initial_tokens
+
+(* Registry contract is the only place where transfer can be initiated from. *)
+field registry_contract: ByStr20 = initial_registry_contract
+
+(* Owner is a privilleged account that can perform various administrative tasks *)
+(* owner of the contract is set to the initial_owner during init.  *)
+field owner : ByStr20 = initial_owner
+
+(* Pause token transfer *)
+field paused : Bool = False
+
+(* Owner can set the maturity date  *)
+field maturity_date : String = initial_maturity_date
+
+
+procedure MakeError (transitionName: String, err: Error)
+  e = make_error_event transitionName err;
+  event e
+end
+
+(* throws an error, halts the contract from further processing *)
+(* different from MakeError *)
+procedure ThrowError(err: Error)
+  e = make_error err;
+  throw e
+end
+
+
+(* Check if the initiator is owner *)
+procedure IsOwner(initiator: ByStr20)
+  current_owner <- owner;
+  is_owner = builtin eq initiator current_owner;
+  match is_owner with
+   | True  =>
+   | False =>
+     err = Unauthorised;
+     ThrowError err
+  end
+end
+
+(* Check if the contract is not paused *)
+procedure IsNotPaused()
+  paused_tmp <- paused;
+  match paused_tmp with
+   | False =>
+   | True =>
+     err = ContractFrozenFailure;
+     ThrowError err
+  end
+end
+
+(* Check if the contract is paused *)
+procedure IsPaused()
+  paused_tmp <- paused;
+  match paused_tmp with
+    | False =>
+      err = ContractFrozenFailure;
+      ThrowError err
+    | True =>
+  end
+end
+
+(* Check if the caller is the registry *)
+procedure IsRegistry()
+  current_registry <- registry_contract;
+  is_registry = builtin eq _sender current_registry;
+  match is_registry with
+   | True =>
+   | False =>
+     err = NotFromRegistry;
+     ThrowError err
+  end
+end
+
+(* @dev: burn tokens. Used by owner *)
+transition Burn(address: ByStr20, tokens: Uint128)
+  IsOwner _sender;
+  label = "Burn";
+  get_bal <- token_balances[address];
+  current_owner <- owner;
+  match get_bal with
+  | Some current_balance =>
+    (* checks if tokens < current_balance *)
+    sufficient_tokens = uint128_le tokens current_balance;
+    match sufficient_tokens with
+    | True =>
+      (* Valid operation *)
+      new_balance = builtin sub current_balance tokens;
+      token_balances[address] := new_balance;
+
+      (* New total number of tokens *)
+      total <- total_tokens;
+      new_total = builtin sub total tokens;
+      total_tokens := new_total;
+      e = {
+            _eventname : "BurnSuccess";
+            burnedBy:   current_owner;
+            address : address;
+            tokens_burned : tokens;
+            new_total_tokens: new_total
+          };
+      event e
+    | False =>
+      err = InsufficientBalance;
+      MakeError label err
+    end
+  | None =>
+    (* address does not have any balance in this contract *)
+    err = InsufficientBalance;
+    MakeError label err
+  end
+end
+
+(* @dev: mint tokens. Used by owner *)
+transition Mint(address: ByStr20, tokens: Uint128)
+  IsOwner _sender;
+  get_balance <- token_balances[address];
+  current_balance = match get_balance with
+  | Some bal => bal
+  | None => Uint128 0
+  end;
+  new_balance = builtin add current_balance tokens;
+  token_balances[address] := new_balance;
+
+  (* since we are adding new tokens to recipient *)
+  (* reflect the change to total number of tokens *)
+  total <- total_tokens;
+  new_total = builtin add total tokens;
+  total_tokens := new_total;
+
+  e = {
+        _eventname: "MintSuccess";
+        mintedBy: _sender;
+        address: address;
+        tokens: tokens;
+        recipient_new_balance: new_balance;
+        new_total_tokens: new_total
+      };
+  event e
+end
+
+(* @dev: pause the contract. Used by registry *)
+transition Pause()
+  IsRegistry;
+  paused := bool_active;
+  e = {
+        _eventname: "PauseSuccess";
+        pausedBy: _sender
+      };
+  event e
+end
+
+(* @dev: unpause the contract. Used by registry *)
+transition UnPause()
+  IsRegistry;
+  paused := bool_inactive;
+  e = {
+        _eventname: "UnPauseSuccess";
+        unPausedBy: _sender
+      };
+  event e
+end
+
+(* @dev: Transfers tokens from an address to another address. *)
+(* Can only be called from registry contract *)
+transition TransferFrom (from : ByStr20, to : ByStr20, tokens : Uint128)
+  IsNotPaused;
+  IsRegistry;
+  label = "TransferFrom";
+  get_current_balance <- token_balances[from];
+  match get_current_balance with
+    | Some balance =>
+      (* checks if the sender has sufficient tokens *)
+      (* checks balance < tokens *)
+      sufficient_tokens = uint128_le tokens balance;
+      match sufficient_tokens with
+      | True =>
+        (* Deduct balance from `from` *)
+        new_balance = builtin sub balance tokens;
+        token_balances[from] := new_balance;
+        (* Update recipient balance *)
+        recipient_current_balance <- token_balances[to];
+        new_balance = get_recipient_new_balance recipient_current_balance tokens;
+        token_balances[to] := new_balance;
+        (*Emits success message *)
+
+        e = {_eventname: "TransferFromOwnerSuccess"; from : from; to: to; tokens: tokens};
+        event e
+
+      | False =>
+        err = InsufficientBalance;
+        MakeError label err
+      end
+    | None =>
+      (* `from` does not have any current balance *)
+      err = NoBalance;
+      MakeError label err
+  end
+end
+
+(* @dev: Updates the contract owner. Used by registry *)
+transition UpdateOwner(new_owner: ByStr20)
+  IsRegistry;
+  owner := new_owner;
+  e = {
+    _eventname: "UpdateOwnerSuccess";
+    updatedBy: _sender
+  };
+  event e
+end
+
+(* @dev: Updates the registry contract. Used by registry *)
+(* Used only when contract is paused *)
+transition UpdateRegistry(new_registry: ByStr20)
+  IsPaused;
+  IsRegistry;
+  registry_contract := new_registry;
+  e = {
+    _eventname: "UpdateRegistrySuccess";
+    updatedBy: _sender
+  };
+  event e
+end
+
+(* @dev: Update maturity date. Used by ownerr *)
+transition UpdateMaturityDate(new_maturity_date:String)
+  IsOwner _sender;
+  maturity_date := new_maturity_date;
+  e = {
+        _eventname: "UpdateMaturityDateSuccess";
+        updatedBy: _sender
+      };
+  event e
+end
