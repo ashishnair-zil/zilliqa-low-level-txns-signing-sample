@@ -259,23 +259,46 @@ async function deployStoContract() {
 
         const nextNonce = (await zilliqa.blockchain.getBalance(address)).result.nonce + 1;
 
+
         const txParams = {
-            "to": NIL_ADDRESS,
-            "value": new BN(0),
-            "gas_price": myGasPrice,
-            "gas_limit": `${gasLimit}`,
-            "data": JSON.stringify(init).replace(/\\"/g, '"'),
-            "code": compressedCode,
-            "version": version,
-            "nonce": nextNonce
+            version: version,
+            toAddr: NIL_ADDRESS,
+            pubKey: publicKey,
+            nonce: nextNonce,
+            amount: new BN(0),
+            gasPrice: myGasPrice,
+            gasLimit: `${gasLimit}`,
+            code: compressedCode,
+            data: JSON.stringify(init).replace(/\\"/g, '"')
         }
-        log("txParams", JSON.stringify(txParams));
+        
+        txParams.signature = await getSignature(txParams);
 
-        const key_id = '5f089649-96a3-428f-b32d-0ff3a560346c';
+        if (txParams.signature) {
+            log('Signature returned from Propine: ' + txParams.signature);
+        } else {
+            throw new Error('Could not get a signature from ADV');
+        }
 
-        const { data} = await curlCall('sign-txns', txParams, { "key_id": key_id });
+        const signedTx = zilliqa.transactions.new(txParams);
 
-        log("data", data);
+        const res = await zilliqa.provider.send(
+            'CreateTransaction',
+            signedTx.txParams
+        );
+        if(res.error){
+            throw new Error(res.error.message);
+        }
+
+        log("res", JSON.stringify(res));
+
+        log("Wait for approx 1 mins......")
+
+        await signedTx.confirm(res.result.TranID, 33, 1000);
+
+        log(`Txns id is :0x${res.result.TranID}`);
+
+        log('Retrieved transaction status successfully');
     } catch (error) {
         log("Signing error..", error.message)
     }
@@ -381,8 +404,8 @@ async function getSignature(txParams){
     
         return response.signed_transaction;
     } catch (error) {
-        log("Signing error from ADV...")
-        throw Error("Adv signing error");
+        log("Signing error from Propine...")
+        throw Error("Propine signing error");
     }
 }
 
