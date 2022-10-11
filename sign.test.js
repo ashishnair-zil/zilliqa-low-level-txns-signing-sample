@@ -231,6 +231,12 @@ async function deployTokenContract() {
 
     txParams.signature = signTransaction(byte);
 
+    if(txParams.signature){
+        log('Signature: ' + txParams.signature);
+    }else{
+        log('Signing issue');
+    }
+
     const signedTx = zilliqa.transactions.new(txParams);
 
     const res = await zilliqa.provider.send(
